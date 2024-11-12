@@ -97,7 +97,6 @@
 #define LED_PIN     13
 #define NUM_LEDS    24
 #define BRIGHTNESS  100
-#define LED_GROUP_SIZE 3
 #define PROBLEM_LED 10
 
 // Initialize LED ring
@@ -113,9 +112,9 @@ const int HUMAN_TRIG_PIN = 8;
 const int HUMAN_ECHO_PIN = 9;
 const int PIEZO_PIN = 10;          
 
-// LED Color Definition - Correction Color
-const uint32_t COLOR_BLUE = ring.Color(0, 0, 255);  // 正确的蓝色
-const uint32_t COLOR_GREEN = ring.Color(0, 255, 0); // 正确的绿色
+// LED Color Definition
+const uint32_t COLOR_BLUE = ring.Color(0, 0, 255);
+const uint32_t COLOR_GREEN = ring.Color(0, 255, 0);
 const uint32_t COLOR_RED = ring.Color(255, 0, 0);   
 const uint32_t COLOR_OFF = ring.Color(0, 0, 0);
 
@@ -137,7 +136,7 @@ const int PROGMEM relaxMelody[] = {
     NOTE_C4, 2, REST, 4
 };
 
-// Warning Music (Mario Music)
+// Warning Music
 const int PROGMEM warningMelody[] = {
   NOTE_E7, 8, NOTE_E7, 8, REST, 8, NOTE_E7, 8,
   REST, 8, NOTE_C7, 8, NOTE_E7, 8, REST, 8,
@@ -145,7 +144,7 @@ const int PROGMEM warningMelody[] = {
   NOTE_G6, 4, REST, 4
 };
 
-// 定义状态枚举
+// State enum
 enum State {
   IDLE,          
   WORKING,       
@@ -153,7 +152,12 @@ enum State {
   BREAK          
 };
 
-// fundamental variable
+// Double click variables
+unsigned long lastButtonPress = 0;
+const unsigned long DOUBLE_CLICK_TIME = 500;  // 双击间隔时间500ms
+int clickCount = 0;
+
+// Variables
 State currentState = IDLE;
 unsigned long startTime = 0;
 unsigned long pausedTime = 0;
@@ -166,14 +170,14 @@ const long DELAY_TIME = 1000;
 unsigned long distanceTimeCheck = 0;
 bool isDistanceWarning = false;
 
-// 音乐相关
+// Music variables
 unsigned long lastMelodyTime = 0;
 unsigned long lastRelaxMelodyTime = 0;
 int currentNote = 0;
 int relaxNoteIndex = 0;
 bool isPlayingRelaxMusic = false;
 
-// LED控制函数
+// LED control functions
 void setAllLEDs(uint32_t color) {
   for(int i = 0; i < NUM_LEDS; i++) {
     ring.setPixelColor(i, color);
@@ -182,21 +186,17 @@ void setAllLEDs(uint32_t color) {
 }
 
 void showCountdown(int remainingSeconds) {
-  int totalGroups = NUM_LEDS / LED_GROUP_SIZE;  
-  int normalGroupsToLight = map(remainingSeconds, 40, 0, 0, totalGroups-1);
-  bool lastGroupLight = (remainingSeconds <= 2);
+  // 映射剩余时间到LED数量
+  int ledsToLight = map(remainingSeconds, 0, 40, 0, NUM_LEDS);
   
-  for(int i = 0; i < NUM_LEDS; i++) {
-    if(i < (totalGroups-1) * LED_GROUP_SIZE) {
-      if(i / LED_GROUP_SIZE < normalGroupsToLight) {
-        ring.setPixelColor(i, COLOR_GREEN);
-      } else {
-        ring.setPixelColor(i, COLOR_OFF);
-      }
-    } else {
-      ring.setPixelColor(i, lastGroupLight ? COLOR_GREEN : COLOR_OFF);
-    }
+  // 先全部熄灭
+  setAllLEDs(COLOR_OFF);
+  
+  // 从LED环的起始位置开始，顺时针点亮LED
+  for(int i = NUM_LEDS - 1; i >= (NUM_LEDS - ledsToLight); i--) {
+    ring.setPixelColor(i, COLOR_GREEN);
   }
+  
   ring.show();
 }
 
@@ -212,51 +212,50 @@ void flashRed() {
 }
 
 void breathingBlue() {
-  static unsigned long lastBreath = 0;
-  static int breathValue = 0;
-  static bool increasing = true;
+  static unsigned long lastRotate = 0;
+  static int currentLed = 0;
   
-  if(millis() - lastBreath > 20) {  
-    if(increasing) {
-      breathValue += 2;
-      if(breathValue >= 255) {
-        increasing = false;
-        breathValue = 255;
-      }
-    } else {
-      breathValue -= 2;
-      if(breathValue <= 0) {
-        increasing = true;
-        breathValue = 0;
+  if(millis() - lastRotate > 50) {  // 保持50ms的速度
+    // 先清除所有LED
+    setAllLEDs(COLOR_OFF);
+    
+    // 点亮12个LED形成半圆光带
+    for(int i = 0; i < 12; i++) {
+      int ledPos = (currentLed + i) % NUM_LEDS;
+      // 添加渐变效果
+      if(i < 3) {  // 头部渐变
+        ring.setPixelColor(ledPos, ring.Color(0, 0, 50 + (i * 68)));
+      } else if(i > 8) {  // 尾部渐变
+        ring.setPixelColor(ledPos, ring.Color(0, 0, 50 + ((11-i) * 68)));
+      } else {  // 中间部分全亮
+        ring.setPixelColor(ledPos, COLOR_BLUE);
       }
     }
     
-    uint32_t blueColor = ring.Color(0, 0, breathValue);
-    for(int i = 0; i < NUM_LEDS; i++) {
-      ring.setPixelColor(i, blueColor);
-    }
     ring.show();
-    lastBreath = millis();
+    
+    // 移动到下一个LED位置
+    currentLed = (currentLed + 1) % NUM_LEDS;
+    lastRotate = millis();
   }
 }
-
-// 音乐控制函数
+// Music functions
 void playRelaxMusic() {
   unsigned long currentTime = millis();
-  if (currentTime - lastRelaxMelodyTime > 300) {  // slow down
+  if (currentTime - lastRelaxMelodyTime > 300) {
     pinMode(PIEZO_PIN, OUTPUT);
     int noteDuration = 1200 / pgm_read_word_near(relaxMelody + relaxNoteIndex + 1);
     int noteToPlay = pgm_read_word_near(relaxMelody + relaxNoteIndex);
     
     if (noteToPlay != REST) {
-      tone(PIEZO_PIN, noteToPlay, noteDuration * 0.8);  // smoothly voice
+      tone(PIEZO_PIN, noteToPlay, noteDuration * 0.8);
     }
     
     lastRelaxMelodyTime = currentTime;
     relaxNoteIndex = (relaxNoteIndex + 2) % (sizeof(relaxMelody) / sizeof(relaxMelody[0]));
     
     if (relaxNoteIndex == 0) {
-      delay(3000);  // longer dely time
+      delay(3000);
     }
   }
 }
@@ -272,7 +271,7 @@ void playWarningMusic() {
   }
 }
 
-// 
+// Helper functions
 bool isButtonPressed(int pin) {
   static unsigned long lastDebounceTime = 0;
   static int lastButtonState = HIGH;
@@ -325,7 +324,7 @@ void swap(long &a, long &b) {
   b = temp;
 }
 
-// 
+// State handling functions
 void handleIdleState() {
   if(isButtonPressed(START_BUTTON_PIN)) {
     startWorking();
@@ -341,6 +340,12 @@ void startWorking() {
   lcd.clear();
   lcd.print("Working: 40s");
   pinMode(PIEZO_PIN, INPUT);
+  
+  // 确保所有LED先清零,然后全部点亮绿色
+  setAllLEDs(COLOR_OFF);
+  delay(50); // 短暂延时确保清零命令执行完成
+  setAllLEDs(COLOR_GREEN);
+  ring.show(); // 确保显示更新
 }
 
 void pauseByButton() {
@@ -367,33 +372,39 @@ void pauseByDistance() {
   currentNote = 0;
   isDistanceWarning = true;
 }
+
 void resumeTimer() {
   currentState = WORKING;
   startTime = millis() - pausedTime;
   lcd.clear();
   lcd.print("Working: 40s");
   pinMode(PIEZO_PIN, INPUT);
-  setAllLEDs(COLOR_OFF);
+  
+  // 恢复LED显示
+  int remaining = 40 - ((millis() - startTime) / 1000);
+  showCountdown(remaining);
 }
 
 void checkCupStatus() {
   bool currentCupState = !digitalRead(CUP_BUTTON_PIN);
   
   if(currentCupState != isCupPresent) {
-    if(!currentCupState) {  // cup was taken
+    if(!currentCupState) {
       lcd.clear();
       lcd.print("Break Time");
       lcd.setCursor(0, 1);
       lcd.print("Take water!");
       isPlayingRelaxMusic = true;
       relaxNoteIndex = 0;
-    } else {  // 水杯放回
+    } else {
       currentState = WORKING;
       startTime = millis();
       pausedTime = 0;
       lcd.clear();
       lcd.print("Working: 40s");
       setAllLEDs(COLOR_OFF);
+      delay(50);
+      setAllLEDs(COLOR_GREEN);
       isPlayingRelaxMusic = false;
       pinMode(PIEZO_PIN, INPUT);
     }
@@ -403,11 +414,36 @@ void checkCupStatus() {
 
 void checkStartButton() {
   if(isButtonPressed(START_BUTTON_PIN)) {
+    unsigned long currentTime = millis();
+    
+    // 检查是否是双击
+    if(currentTime - lastButtonPress < DOUBLE_CLICK_TIME) {
+      clickCount++;
+      if(clickCount == 2) {  // 双击完成
+        // 重置到IDLE状态
+        currentState = IDLE;
+        clickCount = 0;
+        setAllLEDs(COLOR_OFF);
+        lcd.clear();
+        lcd.print("Press to Start");
+        return;
+      }
+    } else {
+      clickCount = 1;  // 重置点击计数
+    }
+    lastButtonPress = currentTime;
+    
+    // 单击的正常处理
     if(currentState == WORKING) {
       pauseByButton();
     } else if(currentState == PAUSED && !isDistanceWarning) {
       resumeTimer();
     }
+  }
+  
+  // 重置超时的点击计数
+  if(millis() - lastButtonPress > DOUBLE_CLICK_TIME) {
+    clickCount = 0;
   }
 }
 
@@ -418,12 +454,12 @@ void checkDistance() {
     long distance = getDistance();
     lastDistanceCheck = millis();
     
-    if (distance > 100) {  // more than 1m
+    if (distance > 100) {
       distanceCount++;
-      if (distanceCount >= 3 && currentState == WORKING) {  // 3times detect
+      if (distanceCount >= 3 && currentState == WORKING) {
         pauseByDistance();
       }
-    } else {  // less than 1 m
+    } else {
       distanceCount = 0;
       if (currentState == PAUSED && isDistanceWarning) {
         resumeTimer();
@@ -443,6 +479,8 @@ void updateTimer() {
     lcd.setCursor(0, 1);
     lcd.print("Take water!");
     pinMode(PIEZO_PIN, INPUT);
+    setAllLEDs(COLOR_OFF); // 确保时间结束时LED全部熄灭
+    ring.show();
     return;
   }
   
@@ -500,9 +538,9 @@ void loop() {
       
     case BREAK:
       checkCupStatus();
-      if(isCupPresent) {  // cup on shows blue
+      if(isCupPresent) {
         setAllLEDs(COLOR_BLUE);
-      } else {  // breathing light
+      } else {
         breathingBlue();
         if(isPlayingRelaxMusic) {
           playRelaxMusic();
